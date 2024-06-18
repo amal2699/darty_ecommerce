@@ -1,0 +1,15 @@
+.navbar {
+    width: 100%;
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    background-color: #0b6aff;
+    color: #fff;
+    height: 52px;
+    font-size: 15px;
+    letter-spacing: 0.05rem;
+  }
+  

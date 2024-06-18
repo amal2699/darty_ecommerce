@@ -1,0 +1,187 @@
+version: '3.7'
+services:
+
+  mysql:
+    container_name: mysql
+    image: amd64/mysql:5.7.42
+    ports:
+      - 3307:3306
+    environment:
+      - MYSQL_ROOT_PASSWORD=password
+      - MYSQL_DATABASE=darty
+    volumes:
+      - ./mysql/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
+      - mysql_data:/var/lib/mysql
+      - ./db:/db
+    networks:
+      - esnet
+  
+  elasticsearch:
+    container_name: elasticsearch
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.5.3
+    build: ./elasticsearch/.
+    environment:
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "discovery.type=single-node"
+      - xpack.security.enabled=false  # override what is in elasticsearch.yml
+      - bootstrap.memory_lock=true
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}  # default username is elastic
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - ./elasticsearch/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+      - es_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: [ "CMD", "wget", "http://127.0.0.1:9200" ]
+      interval: 30s
+      timeout: 10s
+      retries: 50
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - esnet
+
+  kibana:
+    container_name: kibana
+    image: docker.elastic.co/kibana/kibana:8.5.3
+    environment:
+      - SERVERNAME=kibana
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD} 
+    ports:
+      - 5601:5601
+    networks:
+      - esnet
+    depends_on:
+      - elasticsearch
+      
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.5.3
+    container_name: logstash
+    build:
+      context: .
+      dockerfile: Dockerfile-logstash
+    volumes:
+      - "./logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro"
+      - "./logstash.yaml:/usr/share/logstash/config/logstash.yml:ro"
+    environment:
+      LS_JAVA_OPTS: "-Xmx256m -Xms256m"
+    networks:
+      - esnet
+    depends_on:
+      - elasticsearch
+    
+  chorus-ui:
+    container_name: chorus_ui
+    build: ./reactivesearch/.
+    volumes:
+      - './reactivesearch:/usr/src/app:rw'
+      - '/usr/src/app/node_modules'
+    ports:
+      - 4000:3000
+
+  smui:
+    container_name: smui
+    build: ./smui/.
+    ports:
+      - 9000:9000
+    init: true
+    environment:
+      - SMUI_HEADLINE=Chorus SMUI
+      - SMUI_DB_URL=jdbc:mysql://mysql:3306/smui?autoReconnect=true&useSSL=false&allowPublicKeyRetrieval=true
+      - SMUI_DB_USER=root
+      - SMUI_DB_PASSWORD=${SMUI_DB_PASSWORD}
+      - SMUI_DEPLOY_PRELIVE_SOLR_HOST=elasticsearch:9200
+      - SMUI_TOGGLE_UI_WITH_SOLR_FIELDS=false
+      - SMUI_TOGGLE_PRELIVE_NAME=Preview
+      - SMUI_2SOLR_SOLR_HOST=elasticsearch:9200
+      - SMUI_TOGGLE_DEPL_PRELIVE=true
+      - SMUI_TOGGLE_SPELLING=true
+      - SMUI_TOGGLE_DEPL_CUSTOM_SCRIPT=true
+      - SMUI_TOGGLE_DEPL_CUSTOM_SCRIPT_PATH=/smui/conf/smui2es.sh
+      - SMUI_DEPLOY_PRELIVE_FN_RULES_TXT=/configs/ecommerce/rules.txt
+      - SMUI_DEPLOY_PRELIVE_FN_REPLACE_TXT=/configs/ecommerce/replace-rules.txt
+      - SMUI_TOGGLE_RULE_ID_LOGGING=true
+      - SMUI_TOGGLE_EVENTHISTORY=true
+      - SMUI_RULE_TAGGING_ACTIVE=true
+      - SMUI_PREDEFINED_TAGS_FILE=/smui/conf/predefined_tags.json
+      - SMUI_AUTH_CLIENT=DirectBasicAuthClient
+      - SMUI_BASIC_AUTH_USER=admin
+      - SMUI_BASIC_AUTH_PASS=password
+    depends_on:
+      - mysql
+    networks:
+      - esnet
+  
+  embeddings:
+    container_name: embeddings
+    build:
+      context: ./embeddings/.
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000"
+    environment:
+      - OMP_NUM_THREADS=1
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 512M
+    networks:
+      - esnet
+      
+  
+  quepid:
+    container_name: quepid
+    image: o19s/quepid:6.14.0
+    ports:
+      - 3000:3000
+    environment:
+      - PORT=3000
+      - RACK_ENV=production
+      - RAILS_ENV=production
+      - DATABASE_URL=mysql2://root:password@mysql:3306/quepid
+      - REDIS_URL=redis://redis:6379/1
+      - FORCE_SSL=false
+      - MAX_THREADS=2
+      - WEB_CONCURRENCY=2
+      - RAILS_LOG_TO_STDOUT=true
+      - RAILS_SERVE_STATIC_FILES=true
+      - SECRET_KEY_BASE=chorus_key
+      - TC_URL=
+      - PRIVACY_URL=
+      - COOKIES_URL=
+      - EMAIL_MARKETING_MODE=false
+      - EMAIL_PROVIDER=
+      - QUEPID_DEFAULT_SCORER=DCG@10
+      - KEYCLOAK_REALM=chorus
+      - KEYCLOAK_SITE=http://keycloak:9080
+      - SIGNUP_ENABLED=true
+    links:
+      - mysql
+      - redis
+    networks: 
+      - esnet
+
+  redis:
+    container_name: quepid_redis
+    image: redis:7.0.11-alpine
+    ports:
+      - 6379:6379
+    networks:
+      - esnet
+
+
+volumes:
+  mysql_data: {}
+  es_data: {}
+
+networks:
+  esnet:
+    driver: bridge
